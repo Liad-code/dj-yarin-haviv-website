@@ -1,0 +1,144 @@
+Facebook Integration: Step-by-Step Guide
+Step 1: Access Meta Events Manager
+
+Go to business.facebook.com
+Log in with the Facebook account that manages Yarin's business page
+Click the hamburger menu (☰) → Events Manager
+
+
+Step 2: Get or Create a Pixel
+If a Pixel already exists:
+
+Select it from the left sidebar
+Click Settings tab
+Copy the Pixel ID (15-16 digit number at the top)
+
+If no Pixel exists:
+
+Click Connect Data Sources (green button)
+Select Web
+Select Meta Pixel → Connect
+Name it "DJ Yarin Haviv Website"
+Skip the website URL for now → Continue
+Select Meta Pixel Only (not Conversions API setup wizard — we're doing that manually)
+Copy the Pixel ID from the confirmation screen
+
+
+Step 3: Generate Conversion API Access Token
+
+In Events Manager, select your Pixel
+Go to Settings tab
+Scroll down to Conversions API section
+Click Generate Access Token
+Copy the token (long string starting with EAA...)
+
+Important: This token won't be shown again. Save it somewhere safe before closing.
+
+Step 4: Add Environment Variables
+Open apps/dj-yarin/.env.local and add:
+# Facebook Pixel (client-side)
+NEXT_PUBLIC_FB_PIXEL_ID=123456789012345
+
+# Facebook Conversion API (server-side)
+FB_PIXEL_ID=123456789012345
+FB_CAPI_ACCESS_TOKEN=EAAxxxxxxxxxxxxxxxxxxxxxxx
+Replace with your actual values. Both Pixel IDs are the same number.
+
+Step 5: Restart Dev Server
+bash# Stop the current server (Ctrl+C), then:
+pnpm --filter @repo/dj-yarin dev
+```
+
+Environment variables only load on server start.
+
+---
+
+### Step 6: Verify Pixel is Loading
+
+1. Open the site in Chrome
+2. Install [Meta Pixel Helper](https://chrome.google.com/webstore/detail/meta-pixel-helper/fdgfkebogiimcoedlicjlajpkdmockpc) extension
+3. Visit your landing page
+4. Click the Pixel Helper icon — should show:
+   - ✅ PageView event detected
+   - Your Pixel ID
+
+---
+
+### Step 7: Test Lead Tracking
+
+1. In Events Manager, go to **Test Events** tab
+2. You'll see a **Test Event Code** (like `TEST12345`)
+3. Add it to `.env.local`:
+```
+   FB_TEST_EVENT_CODE=TEST12345
+```
+4. Restart the dev server
+5. Submit the contact form on your site
+6. Check the **Test Events** tab — you should see:
+   - One "Lead" event appear
+   - Source shows both "Browser" and "Server" (deduplication working)
+
+---
+
+### Step 8: Verify WhatsApp Redirect
+
+After submitting the form:
+1. You should be redirected to WhatsApp
+2. The message should be pre-filled with:
+```
+   היי ירין! 👋
+   
+   שם: [entered name]
+   טלפון: [entered phone]
+   סוג אירוע: [selected event type]
+   
+   אשמח לשמוע פרטים נוספים!
+```
+
+---
+
+### Step 9: Remove Test Code (Before Launch)
+
+Once verified, remove the test code from `.env.local`:
+```
+# Remove or comment out this line:
+# FB_TEST_EVENT_CODE=TEST12345
+
+Step 10: Domain Verification (Recommended)
+This improves tracking accuracy:
+
+In Events Manager → Settings → Domain Verification
+Click Add Domain
+Enter the production domain (e.g., djyarinhaviv.co.il)
+Choose verification method:
+
+DNS TXT record (recommended) — add to your domain registrar
+Or Meta tag — add to layout.tsx head
+
+
+Click Verify
+
+
+Checklist Before Launch
+TaskStatusPixel ID added to env☐Access Token added to env☐Pixel Helper shows PageView☐Test Lead appears in Events Manager☐WhatsApp redirect works with form data☐Test Event Code removed☐Domain verified (optional)☐
+
+Troubleshooting
+Pixel Helper shows no pixel:
+
+Check NEXT_PUBLIC_FB_PIXEL_ID is set (needs the NEXT_PUBLIC_ prefix)
+Restart dev server after adding env vars
+
+Lead event not appearing:
+
+Check Events Manager → Test Events tab (not Overview)
+Verify FB_CAPI_ACCESS_TOKEN is correct
+Check server console for error logs
+
+Duplicate leads showing:
+
+Both events should have the same event_id — Facebook deduplicates automatically
+If duplicates appear, check that eventId is passed to both client and server calls
+
+WhatsApp not opening:
+
+Check siteConfig.contact.whatsapp has the correct number format (972529533448)
