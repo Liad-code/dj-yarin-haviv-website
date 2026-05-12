@@ -12,7 +12,7 @@ const NumericStringToNumber = z.preprocess((val) => {
 }, z.number());
 
 export const ProductSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string(),
   tenant_id: z.string(),
   name: z.string().min(1, "Product name is required"),
   description: z.string().nullable().optional(),

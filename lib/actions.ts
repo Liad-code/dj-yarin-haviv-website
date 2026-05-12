@@ -1,6 +1,7 @@
 "use server";
 
-import { createSupabaseServer } from "@/lib/supabase";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { getDb } from "@/lib/firebase";
 import { ProductSchema, type Product } from "@/lib/types";
 import { Resend } from "resend";
 import { z } from "zod";
@@ -9,30 +10,42 @@ export type GetProductsResult =
   | { data: Product[]; error: null; warning?: string; rawSample?: unknown }
   | { data: null; error: string };
 
+function tsToIso(value: unknown): unknown {
+  if (value instanceof Timestamp) return value.toDate().toISOString();
+  return value;
+}
+
 export async function getProducts(tenantId: string): Promise<GetProductsResult> {
   try {
-    const supabase = await createSupabaseServer();
+    const db = getDb();
 
-    const { data, error } = await supabase
-      .from("products")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .eq("status", "active")
-      .order("created_at", { ascending: false });
+    const snapshot = await db
+      .collection("products")
+      .where("tenant_id", "==", tenantId)
+      .where("status", "==", "active")
+      .orderBy("created_at", "desc")
+      .get();
 
-    if (error) throw error;
+    if (snapshot.empty) return { data: [], error: null };
 
-    if (!data || data.length === 0) return { data: [], error: null };
+    const docs = snapshot.docs.map((doc) => {
+      const raw = doc.data();
+      return {
+        ...raw,
+        id: doc.id,
+        created_at: tsToIso(raw.created_at),
+        updated_at: tsToIso(raw.updated_at),
+      };
+    });
 
-    // Diagnostic validation (non-blocking)
-    const parsed = ProductSchema.array().safeParse(data);
+    const parsed = ProductSchema.array().safeParse(docs);
     if (!parsed.success) {
       console.warn("[getProducts] Schema mismatch:", parsed.error.errors);
       return {
         data: [],
         error: null,
         warning: "Schema mismatch",
-        rawSample: data[0],
+        rawSample: docs[0],
       };
     }
 
@@ -40,8 +53,6 @@ export async function getProducts(tenantId: string): Promise<GetProductsResult> 
   } catch (err) {
     console.error("[getProducts] Failed:", err);
     return { data: null, error: "Failed to fetch products" };
-    
-    
   }
 }
 
@@ -66,24 +77,21 @@ export async function submitContactForm(
   input: ContactFormInput
 ): Promise<SubmitContactFormResult> {
   try {
-    // Validate input
     const validated = ContactFormSchema.safeParse(input);
     if (!validated.success) {
-      return { 
-        data: null, 
-        error: validated.error.errors[0]?.message || 'Invalid input' 
+      return {
+        data: null,
+        error: validated.error.errors[0]?.message || 'Invalid input'
       };
     }
 
     const { name, phone, eventType } = validated.data;
 
-    // 1. Save to Supabase contacts table
-    const supabase = await createSupabaseServer();
-    
-    // Use phone as unique identifier - prevents duplicate leads from same phone
-    const { data: contact, error: dbError } = await supabase
-      .from('contacts')
-      .insert({
+    // 1. Save to Firestore `contacts` collection
+    let contactId = 'unknown';
+    try {
+      const db = getDb();
+      const ref = await db.collection('contacts').add({
         tenant_id: tenantId,
         name,
         phone,
@@ -94,12 +102,11 @@ export async function submitContactForm(
           event_type: eventType,
           form_submitted_at: new Date().toISOString(),
         },
-      })
-      .select()
-      .single();
-
-    if (dbError) {
-      console.error('[submitContactForm] Database error:', dbError);
+        created_at: FieldValue.serverTimestamp(),
+      });
+      contactId = ref.id;
+    } catch (dbError) {
+      console.error('[submitContactForm] Firestore error:', dbError);
       // Don't fail if DB save fails - still send email
     }
 
@@ -107,16 +114,11 @@ export async function submitContactForm(
     const resendApiKey = process.env.RESEND_API_KEY;
     if (!resendApiKey) {
       console.warn('[submitContactForm] RESEND_API_KEY not configured');
-      // Return success anyway since we saved to DB
-      return { 
-        data: { id: contact?.id || 'unknown' }, 
-        error: null 
-      };
+      return { data: { id: contactId }, error: null };
     }
 
     const resend = new Resend(resendApiKey);
 
-    // Event type labels for email
     const eventTypeLabels: Record<string, string> = {
       wedding: 'חתונה',
       birthday: 'יום הולדת',
@@ -128,7 +130,6 @@ export async function submitContactForm(
 
     const eventTypeLabel = eventTypeLabels[eventType] || eventType;
 
-    // Send email to both recipients
     await resend.emails.send({
       from: 'DJ Yarin Haviv <noreply@dj-yarinhaviv.com>',
       to: ['yarinhaviv020@gmail.com', 'liad.marketingservices@gmail.com'],
@@ -136,7 +137,7 @@ export async function submitContactForm(
       html: `
         <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #7c3aed;">לקוח חדש מהאתר! 🎉</h2>
-          
+
           <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <p style="margin: 10px 0;"><strong>שם:</strong> ${name}</p>
             <p style="margin: 10px 0;"><strong>טלפון:</strong> ${phone}</p>
@@ -152,16 +153,13 @@ export async function submitContactForm(
       `,
     });
 
-    return { 
-      data: { id: contact?.id || 'unknown' }, 
-      error: null 
-    };
+    return { data: { id: contactId }, error: null };
 
   } catch (err) {
     console.error('[submitContactForm] Failed:', err);
-    return { 
-      data: null, 
-      error: 'Failed to submit form. Please try again.' 
+    return {
+      data: null,
+      error: 'Failed to submit form. Please try again.'
     };
   }
 }
